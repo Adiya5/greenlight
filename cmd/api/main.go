@@ -15,6 +15,8 @@ import (
 
 	_ "github.com/lib/pq"
 	"github.com/shynggys9219/greenlight/internal/data"
+
+	"github.com/Adiya5/greenlight/internal/data"
 )
 
 const version = "1.0.0"
@@ -79,10 +81,13 @@ func main() {
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
-	logger.Printf("starting %s server on %s", cfg.env, srv.Addr)
-	// reuse defined variable err
+	logger.PrintInfo("starting server", map[string]string{
+		"addr": srv.Addr,
+		"env":  cfg.env,
+	})
 	err = srv.ListenAndServe()
-	logger.Fatal(err)
+	// Use the PrintFatal() method to log the error and exit.
+	logger.PrintFatal(err, nil)
 }
 
 func openDB(cfg config) (*sql.DB, error) {

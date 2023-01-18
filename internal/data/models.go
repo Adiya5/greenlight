@@ -14,12 +14,14 @@ var (
 // Create a Models struct which wraps the MovieModel
 // kind of enveloping
 type Models struct {
-	Movies MovieModel
+	Movies    MovieModel
+	Directors DirectorsModel
 }
 
 // method which returns a Models struct containing the initialized MovieModel.
 func NewModels(db *sql.DB) Models {
 	return Models{
-		Movies: MovieModel{DB: db},
+		Movies:    MovieModel{DB: db},
+		Directors: DirectorsModel{DB: db},
 	}
 }

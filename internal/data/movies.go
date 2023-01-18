@@ -1,7 +1,9 @@
 package data
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"github.com/shynggys9219/greenlight/internal/validator"
 	"time"
 
@@ -18,6 +20,15 @@ type Movie struct {
 	Runtime   int32     `json:"runtime,omitempty,string"` // Movie runtime (in minutes), "string" - convert int to string
 	Genres    []string  `json:"genres,omitempty"`         // Slice of genres for the movie (romance, comedy, etc.)
 	Version   int32     `json:"version"`                  // The version number starts at 1 and will be incremented each
+	// time the movie information is updated
+}
+
+type Director struct {
+	ID      int64    `json:"id"` // Unique integer ID for the movie
+	Name    string   `json:"name"`
+	Surname string   `json:"surname"`
+	Awards  []string `json:"awards,omitempty"` // Slice of genres for the movie (romance, comedy, etc.)
+
 	// time the movie information is updated
 }
 
@@ -40,6 +51,10 @@ type MovieModel struct {
 	DB *sql.DB
 }
 
+type DirectorsModel struct {
+	DB *sql.DB
+}
+
 // method for inserting a new record in the movies table.
 func (m MovieModel) Insert(movie *Movie) error {
 	query := `
@@ -48,6 +63,14 @@ func (m MovieModel) Insert(movie *Movie) error {
 		RETURNING id, created_at, version`
 
 	return m.DB.QueryRow(query, &movie.Title, &movie.Year, &movie.Runtime, pq.Array(&movie.Genres)).Scan(&movie.ID, &movie.CreatedAt, &movie.Version)
+}
+func (m DirectorsModel) Insert(director *Director) error {
+	query := `
+	INSERT INTO directors(name, surname, awards)
+	VALUES ($1, $2, $3)
+	RETURNING id`
+
+	return m.DB.QueryRow(query, &director.Name, &director.Surname, pq.Array(&director.Awards)).Scan(&director.ID)
 }
 
 // method for fetching a specific record from the movies table.
@@ -64,6 +87,89 @@ WHERE id = $1`
 		&movie.Version)
 	return &movie, m.DB.QueryRow(query, id).Err()
 }
+func (m DirectorsModel) GetAll(name string, awards []string, filters Filters) ([]*Director, error) {
+	// Update the SQL query to include the filter conditions.
+	query := fmt.Sprintf(`
+SELECT id, name, surname, awards
+FROM directors
+WHERE (to_tsvector('simple', name) @@ plainto_tsquery('simple', $1) OR $1 = '')
+AND (awards @> $2 OR $2 = '{}')
+ORDER BY %s %s, id ASC
+LIMIT $3 OFFSET $4`, filters.sortColumn(), filters.sortByAwards())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	// Pass the title and genres as the placeholder parameter values.
+	args := []any{name, pq.Array(awards), filters.limit(), filters.offset()}
+	// And then pass the args slice to QueryContext() as a variadic parameter.
+	rows, err := m.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	defer rows.Close()
+	directors := []*Director{}
+	for rows.Next() {
+		var director Director
+		err := rows.Scan(
+			&director.ID,
+			&director.Name,
+			&director.Surname,
+			pq.Array(&director.Awards),
+		)
+		if err != nil {
+			return nil, err
+		}
+		directors = append(directors, &director)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return directors, nil
+}
+func (m MovieModel) GetAll(title string, genres []string, filters Filters) ([]*Movie, error) {
+	// Update the SQL query to include the filter conditions.
+	query := fmt.Sprintf(`
+SELECT id, created_at, title, year, runtime, genres, version
+FROM movies
+WHERE (to_tsvector('simple', title) @@ plainto_tsquery('simple', $1) OR $1 = '')
+AND (genres @> $2 OR $2 = '{}')
+ORDER BY %s %s, id ASC
+LIMIT $3 OFFSET $4`, filters.sortColumn(), filters.sortDirection())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	// Pass the title and genres as the placeholder parameter values.
+	args := []any{title, pq.Array(genres), filters.limit(), filters.offset()}
+	// And then pass the args slice to QueryContext() as a variadic parameter.
+	rows, err := m.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	defer rows.Close()
+	movies := []*Movie{}
+	for rows.Next() {
+		var movie Movie
+		err := rows.Scan(
+			&movie.ID,
+			&movie.CreatedAt,
+			&movie.Title,
+			&movie.Year,
+			&movie.Runtime,
+			pq.Array(&movie.Genres),
+			&movie.Version,
+		)
+		if err != nil {
+			return nil, err
+		}
+		movies = append(movies, &movie)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return movies, nil
+}
 
 // method for updating a specific record in the movies table.
 func (m MovieModel) Update(movie *Movie) error {
@@ -79,8 +185,6 @@ func (m MovieModel) Update(movie *Movie) error {
 		pq.Array(movie.Genres),
 		movie.ID).Scan(
 		&movie.Version)
-	// Use the QueryRow() method to execute the query, passing in the args slice as a
-	// variadic parameter and scanning the new version value into the movie struct.
 
 }
 
@@ -98,15 +202,10 @@ WHERE id = $1`
 	if err != nil {
 		return err
 	}
-	// Call the RowsAffected() method on the sql.Result object to get the number of rows
-	// affected by the query.
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return err
 	}
-	// If no rows were affected, we know that the movies table didn't contain a record
-	// with the provided ID at the moment we tried to delete it. In that case we
-	// return an ErrRecordNotFound error.
 	if rowsAffected == 0 {
 		return ErrRecordNotFound
 	}
